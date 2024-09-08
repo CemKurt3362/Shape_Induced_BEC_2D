@@ -1,0 +1,201 @@
+clear
+clc
+
+
+
+max_eig=5;
+min_angle = 0;
+max_angle=0;
+index = 1;
+
+% Initialize figure handles
+figHandles = gobjects(4, 1);
+angles = [0, 11, 22, 33, 45];
+
+eigs = zeros(1+max_angle, max_eig); % Preallocate for eigenvalues
+eigfuns = cell(1+max_angle, 1); % Preallocate cell array for eigenfunctions
+models = cell(length(angles), 1);
+
+% Constants
+h = 6.62606896*10^(-34);          % Planck constant (J.s)
+hbar = h/(2*pi);
+Kb = 1.380649*10^(-23);           % Boltzmann constant
+au = 1.6605*10^(-27);
+mass = 4.0026*au;                 % He4 mass
+Temp = 0.25;                      % Temperature in Kelvin
+NValue = 10000;                   %  N
+L1 = 1000*10^(-9);                % Longitudal Length
+Lt = 100*10^(-9);                 % Transverse Length
+
+
+angleid = 1;
+for angle = angles
+
+    % Define outer square geomtery for finite element analysis
+    R1 = [3; 4; -1/2; 1/2; 1/2; -1/2; -1/2; -1/2; 1/2; 1/2];
+    %creating inside walls and rotating
+    R2 = [3; 4; -0.35; 0.35; 0.35; -0.35; -0.35; -0.35; 0.35; 0.35];
+    model_r2 = createpde;
+    geometryFromEdges(model_r2,decsg(R2));
+    gR2 = model_r2.Geometry;
+    gR2=rotate(gR2,angle,[0 0]);
+    R2_x = gR2.Vertices(:,1);
+    R2_y = gR2.Vertices(:,2);
+    R2 = [3; 4; R2_x; R2_y];
+
+
+    %combining R1 and R2 geometry to create core shell structre
+    gd = [R1,R2];
+
+    ns = char('R1','R2');
+    ns = ns';
+
+    sf = 'R1-R2';
+
+    [g1,bt] = decsg(gd,sf,ns);
+
+    [g2,bt2] = csgdel(g1,bt);
+
+
+    %creating PDE model to use PDE eigensolver
+    model = createpde;
+    g = geometryFromEdges(model,g2);
+
+    %edges and vertices that is overmeshed
+    edges=[1 2 3 4 5 6 7 8];
+    vertices = [1 2 3 4 5 6 7 8];
+    mesh = generateMesh(model,"Hmax",0.01, "Hedge",{edges,0.001},"Hvertex",{edges,0.0001});
+
+    %defining boundary condition as drichlet in PDE solver
+    applyBoundaryCondition(model,"dirichlet","Edge",edges,"u",0);
+
+    %PDE coefficents.
+    specifyCoefficients(model,"m",0,...
+        "d",1,...
+        "c",1,...
+        "a",0,...
+        "f",0);
+
+
+    %dividing searching intervals to smaller intervals for faster and accurate
+    %computation
+    eigenvalues =[];
+    temp_eigenvalues=[];
+    i=0;
+    eigenfunctions = [];
+
+    while length(eigenvalues) < max_eig
+        evr= [500*i, 500*(i+1)];
+        result = solvepdeeig(model,evr);
+        eigenvalues = [eigenvalues;  result.Eigenvalues] ;
+        eigenfunctions = [eigenfunctions, result.Eigenvectors];
+        i = i+1;
+        fprintf("angle = %f | length(eigenvalues) = %f \n" ,angle,length(eigenvalues))
+    end
+
+
+    temp_eigenvalues = eigenvalues(1:max_eig);
+    temp_eigenfunctions = eigenfunctions(:, 1:max_eig);
+
+    eigs(angleid, :) = sqrt(temp_eigenvalues)';
+    eigfuns{angleid} = temp_eigenfunctions;
+    models{angleid} = model;
+
+
+    % for k = 39:43
+    %     figure;
+    %     pdeplot(model, 'XYData', eigenfunctions(:, k), 'Mesh', 'off');
+    %     axis equal;
+    %
+    %
+    %     % Export the plot as PDF
+    %     title(sprintf('Eigenfunction %d', k));
+    %     exportFileName = sprintf('%dEigenfunction_%d.pdf',max_angle, k);
+    %     print(exportFileName,'-dpdf','-r300');
+    %
+    %
+    % end
+    angleid = angleid +1;
+end
+
+%add egienmatrices to the ouput of the function if you want to get eigenmatrix data as well
+%writematrix(eigs,'eigList2.csv')
+
+
+thermal_occupations = cell(length(angles), 1);
+normalization_constant = 0;
+
+for i = 1:length(angles)
+    angle = angles(i);
+    model = models{i};
+
+
+    filename = sprintf('figure1_%ddegree_EivsfB_T1_nr1.csv', angle);
+    data = readmatrix(filename);
+
+    % second column (Bose distribution values)
+    bose_values = data(:, 2);
+
+    current_eigenfunctions = eigfuns{i};
+    % Calculating the thermal occupation by multiplying each eigenfunction and Bose distribution value and summing the products
+
+    sum_thermal_occupation = zeros(size(current_eigenfunctions, 1), 1);
+
+    for m = 1:4 % degenerate states
+        sum_thermal_occupation = sum_thermal_occupation +current_eigenfunctions(:, m).^2 * bose_values(m);
+    end
+
+    % Store the summed thermal occupation matrix for the current angle
+
+    thermal_occupations{i} = sum_thermal_occupation  ;
+    
+    if normalization_constant < max(sum_thermal_occupation)
+            normalization_constant= max(sum_thermal_occupation);
+    end
+
+end
+
+
+
+%normalization 
+for 
+thermal_occupations{i} = thermal_occupations / (normalization_constant);
+end
+
+thermal_occupations = thermal_occupations / max(sum_thermal_occupation);
+
+
+global_min = inf;
+global_max = -inf;
+
+% Loop through thermal_occupations to find the global min and max
+for i = 1:length(thermal_occupations)
+    local_min = min(thermal_occupations{i});
+    local_max = max(thermal_occupations{i});
+
+    if local_min < global_min
+        global_min = local_min;
+    end
+
+    if local_max > global_max
+        global_max = local_max;
+    end
+end
+
+
+for i = 1:length(angles)
+
+    angle = angles(i);
+    model = models{i};
+
+
+    figure;
+    pdeplot(model, 'XYData', thermal_occupations{i}, 'Mesh', 'off');
+
+    caxis([global_min, global_max]);
+
+    colormap hot;
+    colorbar; % Display the colorbar
+    axis equal;
+    title(sprintf('Thermal Occupation for %d degrees', angle));
+end
